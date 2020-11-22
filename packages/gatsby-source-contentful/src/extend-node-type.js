@@ -1,6 +1,7 @@
 const fs = require(`fs`)
 const path = require(`path`)
 const crypto = require(`crypto`)
+const { generateImageData } = require("gatsby-plugin-image")
 
 const Promise = require(`bluebird`)
 const {
@@ -117,6 +118,82 @@ const createUrl = (imgUrl, options = {}) => {
   return `${imgUrl}?${qs.stringify(args)}`
 }
 exports.createUrl = createUrl
+
+const generateImageSource = (
+  filename,
+  width,
+  height,
+  toFormat,
+  _fit, // We use resizingBehavior instead
+  {
+    jpegProgressive,
+    quality,
+    cropFocus,
+    background,
+    jpegProgressive,
+    resizingBehavior,
+  }
+) => {
+  const url = createUrl(filename, {
+    width,
+    height,
+    toFormat,
+    resizingBehavior,
+    background,
+    quality,
+    jpegProgressive,
+    cropFocus,
+  })
+  return { width, height, format, url }
+}
+
+const fitMap = new Map({
+  pad: "contain",
+  fill: "cover",
+  scale: "fill",
+  crop: "cover",
+  thumb: "cover",
+})
+
+const resolveGatsbyImageData = async (image, options) => {
+  const { baseUrl, ...sourceMetadata } = getBasicImageProps(image, options)
+
+  const {
+    layout,
+    formats,
+    width,
+    height,
+    maxWidth,
+    maxHeight,
+    sizes,
+    reporter,
+    resizingBehavior,
+    sizes,
+    placeholder,
+  } = options
+
+  const args = {
+    layout,
+    formats,
+    filename: baseUrl,
+    width,
+    height,
+    maxWidth,
+    maxHeight,
+    sizes,
+    reporter,
+    sourceMetadata,
+    generateImageSource,
+    placeholderURL:
+      placeholder === "blurred" ? await getBase64Image({ baseUrl }) : undefined,
+    fit: fitMap.get(resizingBehavior),
+    options,
+  }
+
+  return generateImageData(args)
+}
+
+exports.resolveGatsbyImageData = resolveGatsbyImageData
 
 const resolveFixed = (image, options) => {
   if (!isImage(image)) return null
@@ -453,6 +530,84 @@ const fixedNodeType = ({ name, getTracedSVG }) => {
   }
 }
 
+export const ImageFormatType = new GraphQLEnumType({
+  name: `ImageFormat`,
+  values: {
+    AUTO: { value: `auto` },
+    JPG: { value: `jpg` },
+    PNG: { value: `png` },
+    WEBP: { value: `webp` },
+  },
+})
+
+export const ImagePlaceholderType = new GraphQLEnumType({
+  name: `ImagePlaceholder`,
+  values: {
+    BLURRED: { value: `blurred` },
+    NONE: { value: `none` },
+  },
+})
+
+const gatsbyImageDataType = () => {
+  return {
+    name: `ContentfulImageData`,
+    type: new GraphQLNonNull(GraphQLJSON),
+    args: {
+      layout: {
+        type: ImageLayoutType,
+        defaultValue: `fixed`,
+      },
+      width: {
+        type: GraphQLInt,
+      },
+      height: {
+        type: GraphQLInt,
+      },
+      maxWidth: {
+        type: GraphQLInt,
+      },
+      maxHeight: {
+        type: GraphQLInt,
+      },
+      quality: {
+        type: GraphQLInt,
+      },
+      formats: {
+        type: GraphQLList(ImageFormatType),
+        defaultValue: [`auto`, `webp`],
+      },
+      resizingBehavior: {
+        type: ImageResizingBehavior,
+      },
+      cropFocus: {
+        type: ImageCropFocusType,
+      },
+      background: {
+        type: GraphQLString,
+      },
+      sizes: {
+        type: GraphQLString,
+      },
+      placeholder: {
+        type: ImagePlaceholderType,
+        defaultValue: `blurred`,
+      },
+    },
+    resolve: async (image, options, context) => {
+      const node = await resolveGatsbyImageData(image, options)
+      if (!node) {
+        return null
+      }
+      return {
+        ...node,
+        image,
+        options,
+        context,
+      }
+    },
+  }
+}
+
 const fluidNodeType = ({ name, getTracedSVG }) => {
   return {
     type: new GraphQLObjectType({
@@ -594,6 +749,7 @@ exports.extendNodeType = ({ type, store, cache, getNodesByType }) => {
 
   const fluidNode = fluidNodeType({ name: `ContentfulFluid`, getTracedSVG })
   const sizesNode = fluidNodeType({ name: `ContentfulSizes`, getTracedSVG })
+  const gatsbyImageData = gatsbyImageDataType()
   sizesNode.deprecationReason = `Sizes was deprecated in Gatsby v2. It's been renamed to "fluid" https://example.com/write-docs-and-fix-this-example-link`
 
   return {
@@ -601,6 +757,7 @@ exports.extendNodeType = ({ type, store, cache, getNodesByType }) => {
     resolutions: resolutionsNode,
     fluid: fluidNode,
     sizes: sizesNode,
+    gatsbyImageData,
     resize: {
       type: new GraphQLObjectType({
         name: `ContentfulResize`,
